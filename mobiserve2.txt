@@ -1,0 +1,877 @@
+// src/App.js
+import React, { useState, useEffect } from 'react';
+import { BrowserRouter as Router, Route, Switch } from 'react-router-dom';
+import { motion } from 'framer-motion';
+import { AuthProvider } from './contexts/AuthContext';
+import Navigation from './components/Navigation';
+import Home from './pages/Home';
+import AllJobs from './pages/AllJobs';
+import CustomerDetails from './pages/CustomerDetails';
+import ProductAnalysis from './pages/ProductAnalysis';
+import RevenueAnalysis from './pages/RevenueAnalysis';
+import Login from './pages/Login';
+import { readExcelFile, getDataObservable } from './services/excelService';
+import { Canvas } from '@react-three/fiber';
+import { Stars } from '@react-three/drei';
+
+function App() {
+  const [data, setData] = useState(null);
+
+  useEffect(() => {
+    const loadInitialData = async () => {
+      const initialData = await readExcelFile();
+      setData(initialData);
+    };
+    loadInitialData();
+
+    const subscription = getDataObservable().subscribe(newData => {
+      setData(newData);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  return (
+    <AuthProvider>
+      <Router>
+        <div className="App relative min-h-screen bg-gradient-to-br from-blue-900 to-purple-900 text-white">
+          <Canvas className="absolute inset-0 z-0">
+            <Stars />
+            <ambientLight intensity={0.5} />
+            <pointLight position={[10, 10, 10]} />
+          </Canvas>
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 1 }}
+            className="relative z-10"
+          >
+            <Navigation />
+            <Switch>
+              <Route exact path="/" render={() => <Home data={data} />} />
+              <Route path="/all-jobs" render={() => <AllJobs data={data} />} />
+              <Route path="/customer-details" render={() => <CustomerDetails data={data} />} />
+              <Route path="/product-analysis" render={() => <ProductAnalysis data={data} />} />
+              <Route path="/revenue-analysis" render={() => <RevenueAnalysis data={data} />} />
+              <Route path="/login" component={Login} />
+            </Switch>
+          </motion.div>
+        </div>
+      </Router>
+    </AuthProvider>
+  );
+}
+
+export default App;
+
+// src/services/excelService.js
+import * as XLSX from 'xlsx';
+import { Subject } from 'rxjs';
+
+const EXCEL_FILE = 'data.xlsx';
+const dataSubject = new Subject();
+
+let cachedData = null;
+
+export const readExcelFile = async () => {
+  if (cachedData) return cachedData;
+
+  const response = await fetch(EXCEL_FILE);
+  const arrayBuffer = await response.arrayBuffer();
+  const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+  
+  const result = {};
+  workbook.SheetNames.forEach(sheetName => {
+    result[sheetName] = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
+  });
+  
+  cachedData = result;
+  return result;
+};
+
+export const writeExcelFile = async (data) => {
+  const workbook = XLSX.utils.book_new();
+  
+  Object.entries(data).forEach(([sheetName, sheetData]) => {
+    const worksheet = XLSX.utils.json_to_sheet(sheetData);
+    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+  });
+  
+  XLSX.writeFile(workbook, EXCEL_FILE);
+  cachedData = data;
+  dataSubject.next(data);
+};
+
+export const addNewJob = async (job) => {
+  const data = await readExcelFile();
+  data.Jobs.push(job);
+  await writeExcelFile(data);
+};
+
+export const addNewCustomer = async (customer) => {
+  const data = await readExcelFile();
+  data.Customers.push(customer);
+  await writeExcelFile(data);
+};
+
+export const updateJob = async (updatedJob) => {
+  const data = await readExcelFile();
+  const index = data.Jobs.findIndex(job => job.id === updatedJob.id);
+  if (index !== -1) {
+    data.Jobs[index] = updatedJob;
+    await writeExcelFile(data);
+  }
+};
+
+export const getDataObservable = () => dataSubject.asObservable();
+
+export const searchCustomers = async (query) => {
+  const data = await readExcelFile();
+  return data.Customers.filter(customer => 
+    customer.name.toLowerCase().includes(query.toLowerCase()) ||
+    customer.phone.includes(query) ||
+    customer.email.toLowerCase().includes(query.toLowerCase())
+  );
+};
+
+export const getCustomerJobs = async (customerId) => {
+  const data = await readExcelFile();
+  return data.Jobs.filter(job => job.customerId === customerId);
+};
+
+// src/pages/Home.js
+import React, { useState } from 'react';
+import { motion } from 'framer-motion';
+import Dashboard from '../components/Dashboard';
+import JobForm from '../components/JobForm';
+
+function Home({ data }) {
+  const [showJobForm, setShowJobForm] = useState(false);
+
+  return (
+    <div className="container mx-auto p-4">
+      <motion.h1
+        initial={{ y: -50, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ duration: 0.5 }}
+        className="text-3xl font-bold mb-4"
+      >
+        Mobi Serve Dashboard
+      </motion.h1>
+      <motion.button
+        whileHover={{ scale: 1.05 }}
+        whileTap={{ scale: 0.95 }}
+        onClick={() => setShowJobForm(true)}
+        className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 mb-4"
+      >
+        Add New Job
+      </motion.button>
+      {showJobForm && <JobForm onClose={() => setShowJobForm(false)} />}
+      {data ? (
+        <Dashboard data={data} />
+      ) : (
+        <p>Loading dashboard data...</p>
+      )}
+    </div>
+  );
+}
+
+export default Home;
+
+// src/services/pdfService.js
+import { jsPDF } from "jspdf";
+import "jspdf-autotable";
+
+export const generateJobSheetPDF = (job) => {
+  const doc = new jsPDF();
+
+  doc.setFontSize(18);
+  doc.text("Job Sheet", 14, 22);
+
+  doc.setFontSize(12);
+  doc.text(`Job ID: ${job.id}`, 14, 30);
+  doc.text(`Customer: ${job.customerName}`, 14, 38);
+  doc.text(`Device: ${job.deviceType}`, 14, 46);
+  doc.text(`Problem: ${job.problem}`, 14, 54);
+  doc.text(`Status: ${job.status}`, 14, 62);
+
+  doc.autoTable({
+    head: [["Item", "Details"]],
+    body: [
+      ["Date", job.date],
+      ["Phone", job.phone],
+      ["Email", job.email],
+      ["Advance Payment", job.advancePayment],
+    ],
+    startY: 70,
+  });
+
+  return doc;
+};
+
+export const shareJobSheet = (job, method) => {
+  const pdf = generateJobSheetPDF(job);
+  const pdfBlob = pdf.output('blob');
+
+  switch (method) {
+    case 'email':
+      // Implement email sharing logic
+      break;
+    case 'whatsapp':
+      // Implement WhatsApp sharing logic
+      break;
+    case 'text':
+      // Implement text message sharing logic
+      break;
+    default:
+      console.error('Invalid sharing method');
+  }
+};
+
+// src/components/CustomerSearch.js
+import React, { useState, useEffect } from 'react';
+import { searchCustomers } from '../services/excelService';
+
+function CustomerSearch({ onSelect }) {
+  const [query, setQuery] = useState('');
+  const [suggestions, setSuggestions] = useState([]);
+
+  useEffect(() => {
+    if (query.length > 2) {
+      const fetchSuggestions = async () => {
+        const results = await searchCustomers(query);
+        setSuggestions(results);
+      };
+      fetchSuggestions();
+    } else {
+      setSuggestions([]);
+    }
+  }, [query]);
+
+  const handleSelect = (customer) => {
+    onSelect(customer);
+    setQuery('');
+    setSuggestions([]);
+  };
+
+  return (
+    <div className="relative">
+      <input
+        type="text"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search customers..."
+        className="w-full p-2 border rounded"
+      />
+      {suggestions.length > 0 && (
+        <ul className="absolute w-full bg-white border rounded mt-1">
+          {suggestions.map((customer) => (
+            <li
+              key={customer.id}
+              onClick={() => handleSelect(customer)}
+              className="p-2 hover:bg-gray-100 cursor-pointer"
+            >
+              {customer.name} - {customer.phone}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+export default CustomerSearch;
+// src/pages/CustomerDetails.js
+import React, { useState, useEffect } from 'react';
+import { motion } from 'framer-motion';
+import { getCustomerJobs } from '../services/excelService';
+import CustomerSearch from '../components/CustomerSearch';
+
+function CustomerDetails() {
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
+  const [customerJobs, setCustomerJobs] = useState([]);
+
+  useEffect(() => {
+    if (selectedCustomer) {
+      const fetchCustomerJobs = async () => {
+        const jobs = await getCustomerJobs(selectedCustomer.id);
+        setCustomerJobs(jobs);
+      };
+      fetchCustomerJobs();
+    }
+  }, [selectedCustomer]);
+
+  return (
+    <div className="container mx-auto p-4">
+      <motion.h1
+        initial={{ y: -50, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ duration: 0.5 }}
+        className="text-3xl font-bold mb-4"
+      >
+        Customer Details
+      </motion.h1>
+      <CustomerSearch onSelect={setSelectedCustomer} />
+      {selectedCustomer && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.5 }}
+          className="mt-4"
+        >
+          <h2 className="text-2xl font-bold">{selectedCustomer.name}</h2>
+          <p>Phone: {selectedCustomer.phone}</p>
+          <p>Email: {selectedCustomer.email}</p>
+          <h3 className="text-xl font-bold mt-4">Job History</h3>
+          <ul>
+            {customerJobs.map((job) => (
+              <li key={job.id} className="mb-2">
+                <p>Job ID: {job.id}</p>
+                <p>Device: {job.deviceType}</p>
+                <p>Status: {job.status}</p>
+              </li>
+            ))}
+          </ul>
+        </motion.div>
+      )}
+    </div>
+  );
+}
+
+export default CustomerDetails;
+
+// src/pages/ProductAnalysis.js
+import React from 'react';
+import { motion } from 'framer-motion';
+import { Bar, Pie } from 'react-chartjs-2';
+
+function ProductAnalysis({ data }) {
+  const deviceRepairCounts = data.Jobs.reduce((acc, job) => {
+    acc[job.deviceType] = (acc[job.deviceType] || 0) + 1;
+    return acc;
+  }, {});
+
+  const repairTimesByDevice = data.Jobs.reduce((acc, job) => {
+    if (!acc[job.deviceType]) {
+      acc[job.deviceType] = [];
+    }
+    acc[job.deviceType].push(job.repairTime);
+    return acc;
+  }, {});
+
+  const averageRepairTimes = Object.entries(repairTimesByDevice).reduce((acc, [device, times]) => {
+    acc[device] = times.reduce((sum, time) => sum + time, 0) / times.length;
+    return acc;
+  }, {});
+
+  return (
+    <div className="container mx-auto p-4">
+      <motion.h1
+        initial={{ y: -50, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ duration: 0.5 }}
+        className="text-3xl font-bold mb-4"
+      >
+        Product Analysis
+      </motion.h1>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.8 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.5 }}
+          className="bg-white p-4 rounded shadow"
+        >
+          <h2 className="text-xl font-bold mb-2">Repairs by Device Type</h2>
+          <Pie
+            data={{
+              labels: Object.keys(deviceRepairCounts),
+              datasets: [{
+                data: Object.values(deviceRepairCounts),
+                backgroundColor: ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF']
+              }]
+            }}
+          />
+        </motion.div>
+        // src/pages/ProductAnalysis.js (continued)
+        <motion.div
+          initial={{ opacity: 0, scale: 0.8 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.5 }}
+          className="bg-white p-4 rounded shadow"
+        >
+          <h2 className="text-xl font-bold mb-2">Average Repair Time by Device</h2>
+          <Bar
+            data={{
+              labels: Object.keys(averageRepairTimes),
+              datasets: [{
+                label: 'Average Repair Time (hours)',
+                data: Object.values(averageRepairTimes),
+                backgroundColor: '#36A2EB'
+              }]
+            }}
+            options={{
+              scales: {
+                y: {
+                  beginAtZero: true
+                }
+              }
+            }}
+          />
+        </motion.div>
+      </div>
+      <motion.div
+        initial={{ opacity: 0, y: 50 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5 }}
+        className="mt-8"
+      >
+        <h2 className="text-2xl font-bold mb-4">Top 5 Most Repaired Products</h2>
+        <ul className="bg-white rounded shadow p-4">
+          {Object.entries(deviceRepairCounts)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5)
+            .map(([device, count], index) => (
+              <li key={device} className="mb-2">
+                <span className="font-bold">{index + 1}. {device}:</span> {count} repairs
+              </li>
+            ))
+          }
+        </ul>
+      </motion.div>
+    </div>
+  );
+}
+
+export default ProductAnalysis;
+// src/pages/RevenueAnalysis.js
+import React, { useState } from 'react';
+import { motion } from 'framer-motion';
+import { Line, Bar } from 'react-chartjs-2';
+import { Chart as ChartJS, registerables } from 'chart.js';
+ChartJS.register(...registerables);
+
+function RevenueAnalysis({ data }) {
+  const [timeFrame, setTimeFrame] = useState('weekly');
+
+  const getRevenueData = () => {
+    // This is a simplified example. You'd need to implement proper date handling and grouping.
+    const revenueByDate = data.Jobs.reduce((acc, job) => {
+      const date = new Date(job.date).toISOString().split('T')[0];
+      acc[date] = (acc[date] || 0) + job.totalCost;
+      return acc;
+    }, {});
+
+    return {
+      labels: Object.keys(revenueByDate),
+      datasets: [{
+        label: 'Revenue',
+        data: Object.values(revenueByDate),
+        fill: false,
+        borderColor: 'rgb(75, 192, 192)',
+        tension: 0.1
+      }]
+    };
+  };
+
+  const getTopPayments = () => {
+    return data.Jobs
+      .sort((a, b) => b.totalCost - a.totalCost)
+      .slice(0, 5);
+  };
+
+  return (
+    <div className="container mx-auto p-4">
+      <motion.h1
+        initial={{ y: -50, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ duration: 0.5 }}
+        className="text-3xl font-bold mb-4"
+      >
+        Revenue Analysis
+      </motion.h1>
+      <div className="mb-4">
+        <label className="mr-2">Time Frame:</label>
+        <select
+          value={timeFrame}
+          onChange={(e) => setTimeFrame(e.target.value)}
+          className="p-2 border rounded"
+        >
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option>
+          <option value="quarterly">Quarterly</option>
+          <option value="yearly">Yearly</option>
+        </select>
+      </div>
+      <motion.div
+        initial={{ opacity: 0, scale: 0.8 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.5 }}
+        className="bg-white p-4 rounded shadow mb-8"
+      >
+        <h2 className="text-xl font-bold mb-2">Revenue Over Time</h2>
+        <Line data={getRevenueData()} />
+      </motion.div>
+      <motion.div
+        initial={{ opacity: 0, y: 50 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5 }}
+        className="bg-white p-4 rounded shadow"
+      >
+        <h2 className="text-xl font-bold mb-2">Top 5 Highest Payments</h2>
+        <Bar
+          data={{
+            labels: getTopPayments().map(job => job.id),
+            datasets: [{
+              label: 'Payment Amount',
+              data: getTopPayments().map(job => job.totalCost),
+              backgroundColor: 'rgba(75, 192, 192, 0.6)'
+            }]
+          }}
+          options={{
+            scales: {
+              y: {
+                beginAtZero: true
+              }
+            }
+          }}
+        />
+      </motion.div>
+    </div>
+  );
+}
+
+export default RevenueAnalysis;
+
+// src/pages/AllJobs.js
+import React, { useState } from 'react';
+import { motion } from 'framer-motion';
+import { updateJob } from '../services/excelService';
+import { shareJobSheet } from '../services/pdfService';
+
+function AllJobs({ data }) {
+  const [filter, setFilter] = useState('all');
+  const [sortBy, setSortBy] = useState('date');
+  const [sortOrder, setSortOrder] = useState('desc');
+
+  const filteredJobs = data.Jobs.filter(job => {
+    if (filter === 'all') return true;
+    return job.status.toLowerCase() === filter;
+  });
+
+  const sortedJobs = filteredJobs.sort((a, b) => {
+    if (a[sortBy] < b[sortBy]) return sortOrder === 'asc' ? -1 : 1;
+    if (a[sortBy] > b[sortBy]) return sortOrder === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  const handleStatusChange = async (job, newStatus) => {
+    const updatedJob = { ...job, status: newStatus };
+    await updateJob(updatedJob);
+  };
+
+  const handleShare = (job, method) => {
+    shareJobSheet(job, method);
+  };
+
+  return (
+    <div className="container mx-auto p-4">
+      <motion.h1
+        initial={{ y: -50, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ duration: 0.5 }}
+        className="text-3xl font-bold mb-4"
+      >
+        All Jobs
+      </motion.h1>
+      <div className="mb-4 flex justify-between">
+        <div>
+          <label className="mr-2">Filter:</label>
+          <select
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="p-2 border rounded"
+          >
+            <option value="all">All</option>
+            <option value="in progress">In Progress</option>
+            <option value="completed">Completed</option>
+          </select>
+        </div>
+        <div>
+          <label className="mr-2">Sort by:</label>
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            className="p-2 border rounded mr-2"
+          >
+            <option value="date">Date</option>
+            <option value="customerName">Customer Name</option>
+            <option value="deviceType">Device Type</option>
+            <option value="status">Status</option>
+          </select>
+          <select
+            value={sortOrder}
+            onChange={(e) => setSortOrder(e.target.value)}
+            className="p-2 border rounded"
+          >
+            <option value="asc">Ascending</option>
+            <option value="desc">Descending</option>
+          </select>
+        </div>
+      </div>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.5 }}
+      >
+        <table className="w-full bg-white shadow-md rounded">
+          <thead>
+            <tr className="bg-gray-200">
+              <th className="p-2">Job ID</th>
+              <th className="p-2">Customer Name</th>
+              <th className="p-2">Device</th>
+              <th className="p-2">Status</th>
+              <th className="p-2">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedJobs.map(job => (
+              <tr key={job.id} className="border-b">
+                <td className="p-2">{job.id}</td>
+                <td className="p-2">{job.customerName}</td>
+                <td className="p-2">{job.deviceType}</td>
+                <td className="p-2">
+                  <select
+                    value={job.status}
+                    onChange={(e) => handleStatusChange(job, e.target.value)}
+                    className="p-1 border rounded"
+                  >
+                    <option value="in progress">In Progress</option>
+                    <option value="completed">Completed</option>
+                  </select>
+                </td>
+                <td className="p-2">
+                  <button
+                    onClick={() => handleShare(job, 'email')}
+                    className="bg-blue-500 text-white px-2 py-1 rounded mr-2"
+                  >
+                    Email
+                  </button>
+                  <button
+                    onClick={() => handleShare(job, 'whatsapp')}
+                    className="bg-green-500 text-white px-2 py-1 rounded mr-2"
+                  >
+                    WhatsApp
+                  </button>
+                  <button
+                    onClick={() => handleShare(job, 'text')}
+                    className="bg-yellow-500 text-white px-2 py-1 rounded"
+                  >
+                    Text
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </motion.div>
+    </div>
+  );
+}
+
+export default AllJobs;
+
+// src/components/DeviceSelector.js
+import React, { useState, useEffect } from 'react';
+import { getDeviceData } from '../services/deviceDataService';
+
+function DeviceSelector({ onSelect }) {
+  const [devices, setDevices] = useState([]);
+  const [selectedDevice, setSelectedDevice] = useState('');
+  const [models, setModels] = useState([]);
+  const [selectedModel, setSelectedModel] = useState('');
+  const [series, setSeries] = useState([]);
+  const [selectedSeries, setSelectedSeries] = useState('');
+  const [years, setYears] = useState([]);
+  const [selectedYear, setSelectedYear] = useState('');
+
+  useEffect(() => {
+    const fetchDevices = async () => {
+      const deviceData = await getDeviceData();
+      setDevices(deviceData);
+    };
+    fetchDevices();
+  }, []);
+
+  useEffect(() => {
+    if (selectedDevice) {
+      setModels(devices.find(d => d.name === selectedDevice).models);
+      setSelectedModel('');
+      setSelectedSeries('');
+      setSelectedYear('');
+    }
+  }, [selectedDevice, devices]);
+
+  useEffect(() => {
+    if (selectedModel) {
+      setSeries(models.find(m => m.name === selectedModel).series);
+      setSelectedSeries('');
+      setSelectedYear('');
+    }
+  }, [selectedModel, models]);
+
+  useEffect(() => {
+    if (selectedSeries) {
+      setYears(series.find(s => s.name === selectedSeries).years);
+      setSelectedYear('');
+    }
+  }, [selectedSeries, series]);
+
+  useEffect(() => {
+    if (selectedYear) {
+      onSelect({
+        device: selectedDevice,
+        model: selectedModel,
+        series: selectedSeries,
+        year: selectedYear
+      });
+    }
+  }, [selectedYear, onSelect, selectedDevice, selectedModel, selectedSeries]);
+
+  return (
+    <div>
+      <select value={selectedDevice} onChange={(e) => setSelectedDevice(e.target.value)}>
+        <option value="">Select Device</option>
+        {devices.map(device => (
+          <option key={device.name} value={device.name}>{device.name}</option>
+        ))}
+      </select>
+
+      {selectedDevice && (
+        <select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)}>
+          <option value="">Select Model</option>
+          {models.map(model => (
+            <option key={model.name} value={model.name}>{model.name}</option>
+          ))}
+        </select>
+      )}
+
+      {selectedModel && (
+        <select value={selectedSeries} onChange={(e) => setSelectedSeries(e.target.value)}>
+          <option value="">Select Series</option>
+          {series.map(s => (
+            <option key={s.name} value={s.name}>{s.name}</option>
+          ))}
+        </select>
+      )}
+
+      {selectedSeries && (
+        <select value={selectedYear} onChange={(e) => setSelectedYear(e.target.value)}>
+          <option value="">Select Year</option>
+          {years.map(year => (
+            <option key={year} value={year}>{year}</option>
+          ))}
+        </select>
+      )}
+    </div>
+  );
+}
+
+export default DeviceSelector;
+
+application. The electron/main.js file will handle the desktop-specific functionality, including creating shortcuts.
+Device Condition Checklist:
+We'll create a new component ConditionChecklist.js that will be used in the JobForm.
+Photo Upload Functionality:
+We'll add a PhotoUpload.js component and a photoService.js to handle photo uploads.
+Digital Signature Capture:
+We'll create a SignatureCapture.js component that will be used in the JobForm and integrated into the PDF generation process.
+Authentication and Authorization:
+We'll expand the authService.js and use the AuthContext for managing user authentication state.
+Backend Server:
+We'll set up an Express.js server in the server/ directory to handle data storage and processing.
+Error Handling and Logging:
+We'll implement a logger.js utility and use it throughout the application for consistent error handling and logging.
+Performance Optimization:
+We'll implement pagination and lazy loading in our components, especially in AllJobs and CustomerDetails.
+Data Protection Compliance:
+We'll ensure that our data handling practices comply with regulations like GDPR.
+Testing:
+We'll set up Jest for unit and integration tests, and Cypress for end-to-end tests.
+CI/CD Pipeline:
+We'll use GitHub Actions or GitLab CI to set up our CI/CD pipeline.
+Device and Problem Selection:
+We'll create new components DeviceSelector.js and ProblemSelector.js, and a new service deviceDataService.js to handle the hierarchical selection of devices and common problems.
+Implementing each of these components and services
+Integrating them into the existing pages and forms
+Setting up the backend server and database
+Implementing the desktop functionality with Electron
+Setting up the testing infrastructure
+Configuring the CI/CD pipeline
+
+mobi-serve/
+├── public/
+│   ├── index.html
+│   ├── manifest.json
+│   ├── favicon.ico
+│   └── logo.png
+├── src/
+│   ├── components/
+│   │   ├── Navigation.js
+│   │   ├── JobForm.js
+│   │   ├── CustomerSearch.js
+│   │   ├── Dashboard.js
+│   │   ├── DeviceSelector.js
+│   │   ├── ProblemSelector.js
+│   │   ├── ConditionChecklist.js
+│   │   ├── PhotoUpload.js
+│   │   └── SignatureCapture.js
+│   ├── pages/
+│   │   ├── Home.js
+│   │   ├── AllJobs.js
+│   │   ├── CustomerDetails.js
+│   │   ├── ProductAnalysis.js
+│   │   ├── RevenueAnalysis.js
+│   │   └── Login.js
+│   ├── services/
+│   │   ├── excelService.js
+│   │   ├── authService.js
+│   │   ├── analyticsService.js
+│   │   ├── pdfService.js
+│   │   ├── photoService.js
+│   │   └── deviceDataService.js
+│   ├── contexts/
+│   │   └── AuthContext.js
+│   ├── utils/
+│   │   ├── helpers.js
+│   │   └── logger.js
+│   ├── styles/
+│   │   └── index.css
+│   ├── tests/
+│   │   ├── unit/
+│   │   ├── integration/
+│   │   └── e2e/
+│   ├── App.js
+│   └── index.js
+├── electron/
+│   └── main.js
+├── server/
+│   ├── index.js
+│   ├── db.js
+│   ├── routes/
+│   │   ├── auth.js
+│   │   ├── jobs.js
+│   │   ├── customers.js
+│   │   └── analytics.js
+│   └── models/
+│       ├── Job.js
+│       ├── Customer.js
+│       └── Device.js
+├── .gitignore
+├── package.json
+├── README.md
+├── .eslintrc.js
+├── .prettierrc
+├── jest.config.js
+└── cypress.json
+
