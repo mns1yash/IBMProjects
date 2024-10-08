@@ -86,5 +86,5 @@ install_all_frameworks()
 
 # Start creating folder structure and files
 create_structure(current_dir, folder_structure)
-
+print(f"Project completed successfully in {current_dir}")
 print(f"Project structure and installations completed successfully in {current_dir}")
